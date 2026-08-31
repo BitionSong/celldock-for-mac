@@ -45,6 +45,7 @@ struct CellDockSettingsView: View {
     @ObservedObject private var alertSounds = AlertSoundService.shared
     @ObservedObject private var languageController = AppLanguageController.shared
     @ObservedObject private var updaterManager = UpdaterManager.shared
+    @ObservedObject private var smsForwarding = SMSForwardingStore.shared
     @Binding private var sidebarWidth: CGFloat
     private let focusFirstItemRequest: Bool
     private let didHandleFocusFirstItemRequest: () -> Void
@@ -58,6 +59,7 @@ struct CellDockSettingsView: View {
     @State private var soundImportError: String?
     @State private var microphoneAuthorizationStatus =
         AVCaptureDevice.authorizationStatus(for: .audio)
+    @State private var presentedForwardingChannel: SMSForwardChannel?
     @FocusState private var listFocused: Bool
 
     init(
@@ -121,6 +123,21 @@ struct CellDockSettingsView: View {
             Button("好", role: .cancel) { soundImportError = nil }
         } message: {
             Text(soundImportError ?? L10n.tr("请选择其他音频文件。"))
+        }
+        .sheet(item: $presentedForwardingChannel) { channel in
+            smsForwardingConfigSheet(for: channel)
+        }
+    }
+
+    @ViewBuilder
+    private func smsForwardingConfigSheet(for channel: SMSForwardChannel) -> some View {
+        switch channel {
+        case .bark:
+            BarkForwardingConfigSheet(store: smsForwarding)
+        case .feishu:
+            FeishuForwardingConfigSheet(store: smsForwarding)
+        case .dingtalk:
+            DingTalkForwardingConfigSheet(store: smsForwarding)
         }
     }
 
@@ -549,7 +566,53 @@ struct CellDockSettingsView: View {
                 }
                 .padding(16)
             }
+
+            settingsSection(title: L10n.tr("短信转发")) {
+                VStack(spacing: 0) {
+                    ForEach(Array(SMSForwardChannel.allCases.enumerated()), id: \.element) { index, channel in
+                        if index > 0 {
+                            Divider().padding(.horizontal, 16)
+                        }
+                        smsForwardingChannelRow(channel)
+                            .padding(16)
+                    }
+                }
+            }
         }
+    }
+
+    private func smsForwardingChannelRow(_ channel: SMSForwardChannel) -> some View {
+        settingRow(
+            title: channel.title,
+            status: smsForwardingStatusText(for: channel),
+            statusColor: smsForwardingStatusColor(for: channel),
+            detail: channel.detail
+        ) {
+            HStack(spacing: 8) {
+                Toggle(channel.title, isOn: Binding(
+                    get: { smsForwarding.isEnabled(channel) },
+                    set: { smsForwarding.setEnabled($0, for: channel) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.adaptiveGlass)
+
+                Button(L10n.tr("配置…")) {
+                    presentedForwardingChannel = channel
+                }
+                .adaptiveGlassButton()
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func smsForwardingStatusText(for channel: SMSForwardChannel) -> String? {
+        guard let result = smsForwarding.lastResults[channel] else { return nil }
+        return result.isSuccess ? L10n.tr("上次转发成功") : L10n.tr("上次转发失败")
+    }
+
+    private func smsForwardingStatusColor(for channel: SMSForwardChannel) -> Color {
+        guard let result = smsForwarding.lastResults[channel] else { return .secondary }
+        return result.isSuccess ? .green : .red
     }
 
     private func soundSettingRow(_ kind: AlertSoundKind) -> some View {

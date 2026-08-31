@@ -97,6 +97,14 @@ swiftc \
 
 "$ROOT/.build/self-tests/ContactStoreSelfTests"
 
+swiftc \
+  -swift-version 5 \
+  "$ROOT/Sources/CellDock/SMSForwardingSigning.swift" \
+  "$ROOT/Tests/SMSForwardingSelfTests/main.swift" \
+  -o "$ROOT/.build/self-tests/SMSForwardingSelfTests"
+
+"$ROOT/.build/self-tests/SMSForwardingSelfTests"
+
 xcrun clang \
   -std=c11 \
   -O2 \

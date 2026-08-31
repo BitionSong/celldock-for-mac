@@ -30,6 +30,10 @@
 | :---: | :---: |
 | <a href="screenshot/5. device.png"><img src="screenshot/5. device.png" width="320" alt="Device"></a> | <a href="screenshot/6. settings.png"><img src="screenshot/6. settings.png" width="320" alt="Settings"></a> |
 
+| SMS Forwarding |
+| :---: |
+| <a href="screenshot/7. forwarding.png"><img src="screenshot/7. forwarding.png" width="320" alt="SMS Forwarding"></a> |
+
 CellDock is a native macOS menu bar app that works with the QDC507 cellular module.
 Plug in the module and you can use the cellular network directly on your Mac — send and
 receive SMS, manage contacts, make calls, save call recordings, or share a module's
@@ -81,6 +85,9 @@ software required.
 - Deleted messages no longer appear in CellDock; if a message is still stored on the module,
   CellDock also tries to clear it.
 - Optionally auto-delete verification-code messages 30 minutes after they are read.
+- Forward incoming SMS to Bark, a Feishu custom bot, or a DingTalk custom bot (Settings →
+  Cellular & Communications → SMS Forwarding), with per-channel enable toggles and a
+  "Send Test" button. Endpoints and signing secrets are stored in the macOS Keychain.
 
 ### Calls & Recording
 
