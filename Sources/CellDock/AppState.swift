@@ -955,6 +955,9 @@ final class AppState: ObservableObject {
                 displayName: SystemContactStore.shared.displayName(for: message.sender),
                 presentation: privacyPresentation
             )
+            if !message.isOutgoing {
+                SMSForwardingService.shared.forward(message)
+            }
         }
     }
 

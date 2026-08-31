@@ -30,6 +30,10 @@
 | :---: | :---: |
 | <a href="screenshot/5. device.png"><img src="screenshot/5. device.png" width="320" alt="设备"></a> | <a href="screenshot/6. settings.png"><img src="screenshot/6. settings.png" width="320" alt="设置"></a> |
 
+| 短信转发 |
+| :---: |
+| <a href="screenshot/7. forwarding.png"><img src="screenshot/7. forwarding.png" width="320" alt="短信转发"></a> |
+
 CellDock 是一款原生 macOS 菜单栏应用，用于连接 QDC507 蜂窝模组。插入模组后，
 你可以直接在 Mac 上使用蜂窝网络、收发短信、管理通讯录、拨打电话、保存通话录音，
 或把指定模组的蜂窝连接作为 SOCKS5 代理共享，无需浏览器服务或额外的通信软件。
@@ -71,6 +75,8 @@ CellDock 是一款原生 macOS 菜单栏应用，用于连接 QDC507 蜂窝模�
 - 短信记录标注来源模组；可在不同可用模组之间选择发送目标。
 - 删除后不再出现在 CellDock；如果短信仍保存在模组中，CellDock 会同时尝试清理。
 - 可选在验证码短信已读 30 分钟后自动删除。
+- 支持将收到的短信转发到 Bark、飞书自定义机器人或钉钉自定义机器人（设置 → 蜂窝与通信 →
+  短信转发），每个渠道可单独开关，并提供"发送测试"按钮。地址和签名密钥保存在 macOS 钥匙串中。
 
 ### 电话与录音
 
