@@ -431,7 +431,11 @@ struct CellDockInitialSetupView: View {
         case .identityConversion:
             return L10n.tr("仅当原值精确匹配已验证配置时执行。CellDock 会先解锁模组，再转换 USB 身份并开启 ADB、CDC‑ECM 与通话音频，逐项回读成功后才重启。")
         case .ecmInitialization:
-            return L10n.tr("CellDock 将把 usbnet 从 0 切换为 1。写入回读成功后模块会重启一次，蜂窝网络将短暂中断。")
+            if appState.modem.hardwareFamily == .quectelNativeVoice,
+               appState.modem.usbConfiguration?.isCellDockTarget != true {
+                return L10n.tr("CellDock 将写入 usbnet=1 和完整 USBCFG。逐项回读成功后模块会重启一次；Quectel 设备不会注入语音内核模块。")
+            }
+            return L10n.tr("CellDock 将确认完整 USBCFG 并把 usbnet 切换为 1。写入回读成功后模块会重启一次。")
         }
     }
 
@@ -472,7 +476,7 @@ struct CellDockInitialSetupView: View {
         case .needsIdentityConversion:
             return L10n.tr("已确认安全原值，可一键转换为 CellDock 兼容配置。")
         case .needsECM:
-            return L10n.tr("已识别 QDC507，但 macOS 联网所需的 CDC‑ECM 尚未开启。")
+            return L10n.tr("已识别模块，但 macOS 联网所需的 CDC‑ECM 尚未开启。")
         case .ready:
             return appState.modem.simReady
                 ? L10n.tr("USB 身份和 CDC‑ECM 均已通过检查，可以开始使用。")

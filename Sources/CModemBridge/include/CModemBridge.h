@@ -41,6 +41,19 @@ void celldock_modem_destroy(CellDockModem *modem);
 size_t celldock_modem_copy_devices(CellDockModemDevice *devices, size_t capacity);
 
 /*
+ * Copies the raw USB string descriptors published by the physical device at
+ * location_id. Output buffers are always NUL-terminated when their capacity
+ * is greater than zero. Returns 1 when the device was found, otherwise zero.
+ */
+int celldock_modem_copy_usb_names(
+    uint32_t location_id,
+    char *vendor_name,
+    size_t vendor_name_capacity,
+    char *product_name,
+    size_t product_name_capacity
+);
+
+/*
  * Opens only IOUSBHostInterface 2, never the parent device or ECM interface,
  * and establishes a quiet AT protocol boundary before returning.
  */

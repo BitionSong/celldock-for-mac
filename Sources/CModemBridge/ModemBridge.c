@@ -165,6 +165,41 @@ static int integer_property(io_service_t service, CFStringRef key, int *value) {
     return converted ? 1 : 0;
 }
 
+static int string_property(
+    io_service_t service,
+    CFStringRef key,
+    char *output,
+    size_t output_capacity
+) {
+    if (output != NULL && output_capacity > 0) {
+        output[0] = '\0';
+    }
+    CFTypeRef property = IORegistryEntryCreateCFProperty(
+        service,
+        key,
+        kCFAllocatorDefault,
+        0
+    );
+    if (property == NULL || CFGetTypeID(property) != CFStringGetTypeID()) {
+        if (property != NULL) {
+            CFRelease(property);
+        }
+        return 0;
+    }
+    Boolean copied = output != NULL && output_capacity > 0 &&
+        CFStringGetCString(
+            (CFStringRef)property,
+            output,
+            (CFIndex)output_capacity,
+            kCFStringEncodingUTF8
+        );
+    CFRelease(property);
+    if (!copied && output != NULL && output_capacity > 0) {
+        output[0] = '\0';
+    }
+    return copied ? 1 : 0;
+}
+
 static int is_known_modem_identity(int vendor, int product) {
     return (vendor == 0x2C7C && product == 0x0125) ||
         (vendor == 0x2CA3 && product == 0x4006);
@@ -235,6 +270,81 @@ size_t celldock_modem_copy_devices(CellDockModemDevice *devices, size_t capacity
         qsort(devices, copied, sizeof(CellDockModemDevice), compare_modem_devices);
     }
     return count;
+}
+
+int celldock_modem_copy_usb_names(
+    uint32_t location_id,
+    char *vendor_name,
+    size_t vendor_name_capacity,
+    char *product_name,
+    size_t product_name_capacity
+) {
+    if (vendor_name != NULL && vendor_name_capacity > 0) {
+        vendor_name[0] = '\0';
+    }
+    if (product_name != NULL && product_name_capacity > 0) {
+        product_name[0] = '\0';
+    }
+    if (location_id == 0) {
+        return 0;
+    }
+
+    io_iterator_t iterator = IO_OBJECT_NULL;
+    CFMutableDictionaryRef matching = IOServiceMatching(kIOUSBHostDeviceClassName);
+    if (matching == NULL) {
+        return 0;
+    }
+    IOReturn result = IOServiceGetMatchingServices(
+        kIOMainPortDefault,
+        matching,
+        &iterator
+    );
+    if (result != kIOReturnSuccess) {
+        return 0;
+    }
+
+    int found = 0;
+    io_service_t candidate = IO_OBJECT_NULL;
+    while ((candidate = IOIteratorNext(iterator)) != IO_OBJECT_NULL) {
+        int location = 0;
+        integer_property(candidate, CFSTR("locationID"), &location);
+        if ((uint32_t)location == location_id) {
+            int copied_vendor = string_property(
+                candidate,
+                CFSTR("USB Vendor Name"),
+                vendor_name,
+                vendor_name_capacity
+            );
+            if (!copied_vendor) {
+                string_property(
+                    candidate,
+                    CFSTR("kUSBVendorString"),
+                    vendor_name,
+                    vendor_name_capacity
+                );
+            }
+            int copied_product = string_property(
+                candidate,
+                CFSTR("USB Product Name"),
+                product_name,
+                product_name_capacity
+            );
+            if (!copied_product) {
+                string_property(
+                    candidate,
+                    CFSTR("kUSBProductString"),
+                    product_name,
+                    product_name_capacity
+                );
+            }
+            found = 1;
+            IOObjectRelease(candidate);
+            break;
+        }
+        IOObjectRelease(candidate);
+    }
+    IOObjectRelease(iterator);
+    return found;
 }
 
 static io_service_t find_known_interface(

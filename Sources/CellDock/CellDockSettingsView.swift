@@ -1,11 +1,11 @@
 import AppKit
 import AVFoundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct CellDockSettingsView: View {
     private enum Category: String, CaseIterable {
         case general = "通用"
+        case sounds = "声音"
         case communications = "蜂窝与通信"
         case permissions = "通知与权限"
         case updates = "软件更新"
@@ -15,6 +15,7 @@ struct CellDockSettingsView: View {
         var systemImage: String {
             switch self {
             case .general: return "gearshape"
+            case .sounds: return "speaker.wave.2.fill"
             case .communications: return "antenna.radiowaves.left.and.right"
             case .permissions: return "bell.badge"
             case .updates: return "arrow.triangle.2.circlepath"
@@ -24,6 +25,7 @@ struct CellDockSettingsView: View {
         var detail: String {
             switch self {
             case .general: return L10n.tr("启动、外观与菜单栏行为")
+            case .sounds: return L10n.tr("选择短信与来电使用的提示音")
             case .communications: return L10n.tr("查看模块状态并管理通话与短信处理")
             case .permissions: return L10n.tr("检查 CellDock 的系统访问权限")
             case .updates: return L10n.tr("检查版本并选择更新频道")
@@ -33,7 +35,8 @@ struct CellDockSettingsView: View {
         var sidebarDetail: String {
             switch self {
             case .general: return L10n.tr("外观、语言与启动")
-            case .communications: return L10n.tr("声音、通话与短信")
+            case .sounds: return L10n.tr("短信提示音与来电铃声")
+            case .communications: return L10n.tr("通话、短信与转发")
             case .permissions: return L10n.tr("通知与系统访问权限")
             case .updates: return L10n.tr("版本与更新频道")
             }
@@ -42,7 +45,6 @@ struct CellDockSettingsView: View {
 
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var contacts = SystemContactStore.shared
-    @ObservedObject private var alertSounds = AlertSoundService.shared
     @ObservedObject private var languageController = AppLanguageController.shared
     @ObservedObject private var updaterManager = UpdaterManager.shared
     @ObservedObject private var smsForwarding = SMSForwardingStore.shared
@@ -56,7 +58,6 @@ struct CellDockSettingsView: View {
     @State private var didResolveInitialCategory = false
     @State private var isConfirmingVerificationAutoDelete = false
     @State private var isConfirmingAutomaticRecording = false
-    @State private var soundImportError: String?
     @State private var microphoneAuthorizationStatus =
         AVCaptureDevice.authorizationStatus(for: .audio)
     @State private var presentedForwardingChannel: SMSForwardChannel?
@@ -113,17 +114,6 @@ struct CellDockSettingsView: View {
         } message: {
             Text("通话接通后会自动录制双方的声音。请先确认已取得通话参与者同意，并遵守所在地法律法规。录音仅保存在这台 Mac。")
         }
-        .alert(
-            "无法使用音频文件",
-            isPresented: Binding(
-                get: { soundImportError != nil },
-                set: { if !$0 { soundImportError = nil } }
-            )
-        ) {
-            Button("好", role: .cancel) { soundImportError = nil }
-        } message: {
-            Text(soundImportError ?? L10n.tr("请选择其他音频文件。"))
-        }
         .sheet(item: $presentedForwardingChannel) { channel in
             smsForwardingConfigSheet(for: channel)
         }
@@ -151,7 +141,7 @@ struct CellDockSettingsView: View {
 
                     settingsSidebarGroup(
                         L10n.tr("偏好设置"),
-                        categories: [.general, .communications]
+                        categories: [.general, .sounds, .communications]
                     )
                     settingsSidebarGroup(
                         L10n.tr("系统"),
@@ -304,6 +294,8 @@ struct CellDockSettingsView: View {
         switch selectedCategory {
         case .general:
             generalSettings
+        case .sounds:
+            SoundSettingsView()
         case .communications:
             communicationSettings
         case .permissions:
@@ -505,18 +497,6 @@ struct CellDockSettingsView: View {
         VStack(spacing: 16) {
             moduleStatusStrip
 
-            settingsSection(title: L10n.tr("声音")) {
-                VStack(spacing: 0) {
-                    soundSettingRow(.message)
-                        .padding(16)
-
-                    Divider().padding(.horizontal, 16)
-
-                    soundSettingRow(.incomingCall)
-                        .padding(16)
-                }
-            }
-
             settingsSection(title: L10n.tr("通话录音")) {
                 settingRow(
                     title: L10n.tr("通话时自动录音"),
@@ -613,76 +593,6 @@ struct CellDockSettingsView: View {
     private func smsForwardingStatusColor(for channel: SMSForwardChannel) -> Color {
         guard let result = smsForwarding.lastResults[channel] else { return .secondary }
         return result.isSuccess ? .green : .red
-    }
-
-    private func soundSettingRow(_ kind: AlertSoundKind) -> some View {
-        settingRow(
-            title: kind.title,
-            detail: alertSounds.displayName(for: kind)
-        ) {
-            HStack(spacing: 8) {
-                Button {
-                    previewSound(kind)
-                } label: {
-                    Label(
-                        alertSounds.previewingKind == kind ? L10n.tr("停止") : L10n.tr("试听"),
-                        systemImage: alertSounds.previewingKind == kind
-                            ? "stop.fill"
-                            : "play.fill"
-                    )
-                }
-                .adaptiveGlassButton()
-                .controlSize(.small)
-
-                Button("选择…") {
-                    chooseCustomSound(kind)
-                }
-                .adaptiveGlassButton()
-                .controlSize(.small)
-
-                if !alertSounds.isUsingDefault(kind) {
-                    Button {
-                        alertSounds.restoreDefault(for: kind)
-                    } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-                    .adaptiveGlassButton()
-                    .buttonBorderShape(.circle)
-                    .controlSize(.small)
-                    .help("恢复默认")
-                    .accessibilityLabel(L10n.tr("恢复默认%@", kind.title))
-                }
-            }
-        }
-    }
-
-    private func previewSound(_ kind: AlertSoundKind) {
-        do {
-            try alertSounds.togglePreview(for: kind)
-        } catch {
-            soundImportError = error.localizedDescription
-        }
-    }
-
-    private func chooseCustomSound(_ kind: AlertSoundKind) {
-        let panel = NSOpenPanel()
-        panel.title = L10n.tr("选择%@", kind.title)
-        panel.prompt = L10n.tr("选择")
-        panel.message = L10n.tr("音频将复制到 CellDock 的应用支持目录，原文件可以安全移动或删除。")
-        panel.allowedContentTypes = [.audio]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.begin { response in
-            guard response == .OK, let sourceURL = panel.url else { return }
-            Task { @MainActor in
-                do {
-                    try alertSounds.installCustomSound(from: sourceURL, for: kind)
-                } catch {
-                    soundImportError = error.localizedDescription
-                }
-            }
-        }
     }
 
     private var moduleStatusStrip: some View {

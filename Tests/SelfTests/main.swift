@@ -213,6 +213,48 @@ do {
         "call history lost its modem route during persistence"
     )
 
+    var outgoingCall = CallSnapshot(
+        phase: .dialing,
+        direction: .outgoing,
+        number: "10086"
+    )
+    try expect(
+        CallTonePolicy.wantsOutgoingRingback(for: outgoingCall),
+        "outgoing dialing did not request ringback"
+    )
+    outgoingCall.phase = .alerting
+    try expect(
+        CallTonePolicy.wantsOutgoingRingback(for: outgoingCall),
+        "outgoing alerting did not keep ringback active"
+    )
+    outgoingCall.phase = .active
+    try expect(
+        !CallTonePolicy.wantsOutgoingRingback(for: outgoingCall),
+        "connected call kept ringback active"
+    )
+    try expect(
+        CallTonePolicy.wantsHangupTone(for: answeredIncomingCall) &&
+            !CallTonePolicy.wantsHangupTone(for: unacknowledgedMissedCall),
+        "hangup tone policy did not distinguish established and unanswered calls"
+    )
+
+    let ringbackWAV = CallToneSynthesizer.wavData(for: .outgoingRingback)
+    let hangupWAV = CallToneSynthesizer.wavData(for: .hangup)
+    try expect(
+        abs(CallToneCadence.outgoingRingback.duration - 5.5) < 0.000_001,
+        "outgoing ringback did not preserve the relaxed 5.5-second repeat interval"
+    )
+    try expect(
+        String(data: ringbackWAV.prefix(4), encoding: .ascii) == "RIFF" &&
+            String(data: ringbackWAV.dropFirst(8).prefix(4), encoding: .ascii) == "WAVE",
+        "ringback synthesizer did not emit a WAV container"
+    )
+    try expect(
+        ringbackWAV.count == 44 + Int((CallToneCadence.outgoingRingback.duration * 8_000).rounded()) * 2 &&
+            hangupWAV.count == 44 + Int((CallToneCadence.hangup.duration * 8_000).rounded()) * 2,
+        "telephone tone cadence produced an unexpected PCM duration"
+    )
+
     func conversationMessage(
         id: String,
         address: String,
@@ -736,19 +778,51 @@ do {
     )
     try expect(
         CallATParser.preferredMediaBackend(
-            firmwareIdentity: "QDC507GLEFM21_01.001.01.007",
+            hardwareFamily: .baiwangInjectedVoice,
             supportsRawPCM: true,
             hasUSBLocation: true
         ) == .qdcModuleBridge,
-        "QDC507 must take priority over its misleading QPCMV capability response"
+        "Baiwang product identity must select the injected voice backend"
     )
     try expect(
         CallATParser.preferredMediaBackend(
-            firmwareIdentity: "EC25EFAR06A06M4G",
+            hardwareFamily: .quectelNativeVoice,
             supportsRawPCM: true,
             hasUSBLocation: true
         ) == .qpcmv,
-        "standard EC25 raw PCM backend selection"
+        "Quectel with QPCMV capability did not select native raw PCM"
+    )
+    try expect(
+        CallATParser.preferredMediaBackend(
+            hardwareFamily: .quectelNativeVoice,
+            supportsRawPCM: false,
+            hasUSBLocation: true
+        ) == .none,
+        "Quectel without QPCMV capability selected a voice backend"
+    )
+    try expect(
+        CallATParser.preferredMediaBackend(
+            hardwareFamily: .baiwangInjectedVoice,
+            supportsRawPCM: false,
+            hasUSBLocation: true
+        ) == .qdcModuleBridge,
+        "Baiwang incorrectly depended on native QPCMV capability"
+    )
+    try expect(
+        CallATParser.preferredMediaBackend(
+            hardwareFamily: .unknown,
+            supportsRawPCM: true,
+            hasUSBLocation: true
+        ) == .none,
+        "unknown USB hardware was allowed to select a voice backend"
+    )
+    try expect(
+        CallATParser.preferredMediaBackend(
+            hardwareFamily: .quectelNativeVoice,
+            supportsRawPCM: true,
+            hasUSBLocation: false
+        ) == .none,
+        "voice backend was selected without a physical USB location"
     )
     var callFramer = CallURCStreamFramer()
     try expect(callFramer.consume("\r\n+CLI").isEmpty, "partial CLIP emitted")
@@ -1116,6 +1190,20 @@ do {
     let qcsq = ATResponseParser.parseQCSQ("\r\n+QCSQ: \"LTE\",-65,-96,140,-11\r\nOK\r\n")
     try expect(qcsq?.dbm == -96, "QCSQ RSRP")
     try expect(qcsq?.technology == "LTE", "QCSQ RAT")
+    try expect(
+        ModemHardwareFamily.classify(vendorName: " Quectel ", productName: "EG25-G") ==
+            .quectelNativeVoice,
+        "Quectel USB vendor string was not classified as native voice"
+    )
+    try expect(
+        ModemHardwareFamily.classify(vendorName: "Quectel", productName: "Baiwang") ==
+            .baiwangInjectedVoice,
+        "Baiwang product string did not take priority over a Quectel vendor string"
+    )
+    try expect(
+        ModemHardwareFamily.classify(vendorName: nil, productName: "unknown") == .unknown,
+        "unknown USB strings were classified as a supported hardware family"
+    )
     try expect(ModemSnapshot().initialSetupState == .insertModule, "setup did not request module")
     let djiUSBConfiguration = ATResponseParser.parseUSBConfiguration(
         "+QCFG: \"usbcfg\",0x2CA3,0x4006,1,1,1,1,1,0,0\r\nOK"
@@ -1147,6 +1235,71 @@ do {
         ModemUSBConfiguration.maVoTarget.usbcfgWriteCommand ==
             "AT+QCFG=\"USBCFG\",0x2C7C,0x0125,1,1,1,1,1,1,1",
         "CellDock target USBCFG write command"
+    )
+    let nativeQuectelUSBConfiguration = ATResponseParser.parseUSBConfiguration(
+        "+QCFG: \"usbcfg\",0x2C7C,0x125,1,1,1,1,1,0,1\r\nOK"
+    )
+    try expect(
+        nativeQuectelUSBConfiguration?.supportsNativeQuectelRuntime == true &&
+            nativeQuectelUSBConfiguration?.adbEnabled == false &&
+            nativeQuectelUSBConfiguration?.audioEnabled == true,
+        "native Quectel USBCFG with only ADB disabled was not accepted for runtime use"
+    )
+    try expect(
+        ModemSnapshot(
+            state: .connected,
+            usbIdentity: "2C7C:0125",
+            hardwareFamily: .quectelNativeVoice,
+            usbNetMode: 0,
+            usbConfiguration: nativeQuectelUSBConfiguration
+        ).initialSetupState == .needsECM,
+        "native Quectel source configuration did not request initialization"
+    )
+    try expect(
+        ModemSnapshot(
+            state: .connected,
+            usbIdentity: "2C7C:0125",
+            hardwareFamily: .quectelNativeVoice,
+            usbNetMode: 1,
+            usbConfiguration: nativeQuectelUSBConfiguration
+        ).initialSetupState == .ready,
+        "native Quectel with usbnet=1 incorrectly required ADB/KO initialization"
+    )
+    let nativeQuectelWithoutAudio = ModemUSBConfiguration(
+        vendorID: 0x2C7C,
+        productID: 0x0125,
+        diagnosticEnabled: true,
+        nmeaEnabled: true,
+        atPortEnabled: true,
+        modemEnabled: true,
+        networkEnabled: true,
+        adbEnabled: false,
+        audioEnabled: false
+    )
+    try expect(
+        !nativeQuectelWithoutAudio.supportsNativeQuectelRuntime,
+        "disabling audio was incorrectly treated like the native Quectel ADB exception"
+    )
+    let nativeQuectelWithoutNetwork = ModemUSBConfiguration(
+        vendorID: 0x2C7C,
+        productID: 0x0125,
+        diagnosticEnabled: true,
+        nmeaEnabled: true,
+        atPortEnabled: true,
+        modemEnabled: true,
+        networkEnabled: false,
+        adbEnabled: false,
+        audioEnabled: true
+    )
+    try expect(
+        ModemSnapshot(
+            state: .connected,
+            usbIdentity: "2C7C:0125",
+            hardwareFamily: .quectelNativeVoice,
+            usbNetMode: 1,
+            usbConfiguration: nativeQuectelWithoutNetwork
+        ).operationalState == .configurationRequired,
+        "native Quectel without a USB network function was incorrectly marked ready"
     )
     try expect(
         ATResponseParser.parseQADBKeyChallenge("\r\n+QADBKEY: 10827907\r\n\r\nOK\r\n") == "10827907",
@@ -1295,6 +1448,19 @@ do {
         ) == .available,
         "registered SIM with an active ECM route was not data-available"
     )
+    var configurationRequiredModem = registeredModem
+    configurationRequiredModem.usbConfiguration = .maVoTargetWithoutADB
+    try expect(
+        configurationRequiredModem.operationalState == .configurationRequired &&
+            CellularDataConnectionPolicy.state(
+                modem: configurationRequiredModem,
+                network: activeECMNetwork,
+                isPresentedEnabled: true,
+                isChangingNetwork: false,
+                isRecovering: false
+            ) == .available,
+        "an active ECM route was hidden by an unrelated module configuration requirement"
+    )
     var noSIMModem = registeredModem
     noSIMModem.simState = .absent
     noSIMModem.registrationState = .unavailable
@@ -1307,6 +1473,55 @@ do {
             isRecovering: false
         ) == .interfaceReady,
         "active ECM interface without a ready SIM was incorrectly marked data-available"
+    )
+    var configurationRequiredWithoutSIM = configurationRequiredModem
+    configurationRequiredWithoutSIM.simState = .absent
+    configurationRequiredWithoutSIM.registrationState = .unavailable
+    try expect(
+        CellularDataConnectionPolicy.state(
+            modem: configurationRequiredWithoutSIM,
+            network: activeECMNetwork,
+            isPresentedEnabled: true,
+            isChangingNetwork: false,
+            isRecovering: false
+        ) == .interfaceReady,
+        "a configuration requirement hid an active ECM interface awaiting SIM service"
+    )
+    var absentModemWithStaleNetwork = registeredModem
+    absentModemWithStaleNetwork.state = .disconnected
+    try expect(
+        CellularDataConnectionPolicy.state(
+            modem: absentModemWithStaleNetwork,
+            network: activeECMNetwork,
+            isPresentedEnabled: true,
+            isChangingNetwork: false,
+            isRecovering: false
+        ) == .waitingForModem,
+        "a disconnected modem trusted stale SystemConfiguration network state"
+    )
+    var reconnectingModemWithStaleNetwork = registeredModem
+    reconnectingModemWithStaleNetwork.lifecyclePhase = .reconnecting
+    try expect(
+        CellularDataConnectionPolicy.state(
+            modem: reconnectingModemWithStaleNetwork,
+            network: activeECMNetwork,
+            isPresentedEnabled: true,
+            isChangingNetwork: false,
+            isRecovering: false
+        ) == .waitingForModem,
+        "a reconnecting modem trusted stale SystemConfiguration network state"
+    )
+    var failedModemWithStaleNetwork = registeredModem
+    failedModemWithStaleNetwork.state = .error
+    try expect(
+        CellularDataConnectionPolicy.state(
+            modem: failedModemWithStaleNetwork,
+            network: activeECMNetwork,
+            isPresentedEnabled: true,
+            isChangingNetwork: false,
+            isRecovering: false
+        ) == .failed,
+        "a failed modem trusted stale SystemConfiguration network state"
     )
     try expect(
         CellularDataConnectionPolicy.state(
@@ -2490,6 +2705,17 @@ do {
             isRetryingLink: true
         ) == .linkDown(isRetrying: true),
         "a module with no ECM carrier was still reported as connecting"
+    )
+    try expect(
+        CellularDataConnectionPolicy.state(
+            modem: configurationRequiredModem,
+            network: carrierlessService,
+            isPresentedEnabled: true,
+            isChangingNetwork: false,
+            isRecovering: false,
+            isRetryingLink: true
+        ) == .linkDown(isRetrying: true),
+        "a configuration requirement hid an enabled ECM service with no carrier"
     )
     try expect(
         CellularDataConnectionPolicy.state(

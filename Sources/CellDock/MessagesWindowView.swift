@@ -559,13 +559,10 @@ private struct MessageBubble: View {
             if message.isOutgoing { Spacer(minLength: 70) }
 
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
-                if let code = message.verificationCode, !message.isOutgoing {
-                    Text(verbatim: appState.privacyPresentation.verificationCode(code))
-                        .font(.caption.weight(.semibold))
-                }
-
-                Text(verbatim: appState.privacyPresentation.messageText(message.body))
-                    .textSelection(.enabled)
+                SMSMessageContentView(
+                    message: message,
+                    isOnAccentBackground: message.isOutgoing
+                )
                     .padding(.leading, message.isOutgoing ? 13 : 19)
                     .padding(.trailing, message.isOutgoing ? 19 : 13)
                     .padding(.vertical, 9)

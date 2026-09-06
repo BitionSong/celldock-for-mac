@@ -24,6 +24,7 @@ final class InitialSetupWindowController: NSObject, NSWindowDelegate {
     private weak var appState: AppState?
     private var window: NSWindow?
     private var dismissalGeneration = 0
+    private var isSuccessDismissalScheduled = false
 
     var isVisible: Bool {
         window?.isVisible == true
@@ -41,6 +42,7 @@ final class InitialSetupWindowController: NSObject, NSWindowDelegate {
         guard let appState else { return }
 
         dismissalGeneration &+= 1
+        isSuccessDismissalScheduled = false
 
         let rootView = CellDockInitialSetupView(
             onDismiss: { [weak self] in
@@ -65,6 +67,10 @@ final class InitialSetupWindowController: NSObject, NSWindowDelegate {
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+
+        if appState.modem.initialSetupState == .ready {
+            scheduleDismissAfterSuccess()
+        }
     }
 
     func requestClose() {
@@ -75,18 +81,39 @@ final class InitialSetupWindowController: NSObject, NSWindowDelegate {
         }
 
         dismissalGeneration &+= 1
+        isSuccessDismissalScheduled = false
         window.close()
     }
 
     func scheduleDismissAfterSuccess() {
+        guard isVisible, !isSuccessDismissalScheduled else { return }
+
         dismissalGeneration &+= 1
         let generation = dismissalGeneration
+        isSuccessDismissalScheduled = true
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-            guard let self,
-                  generation == self.dismissalGeneration,
-                  self.isVisible,
-                  self.canClose else { return }
+        scheduleSuccessDismissalAttempt(generation: generation, after: 0.9)
+    }
+
+    private func scheduleSuccessDismissalAttempt(
+        generation: Int,
+        after delay: TimeInterval
+    ) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            guard generation == self.dismissalGeneration, self.isVisible else {
+                self.isSuccessDismissalScheduled = false
+                return
+            }
+            guard self.appState?.modem.initialSetupState == .ready else {
+                self.isSuccessDismissalScheduled = false
+                return
+            }
+            guard self.canClose else {
+                self.scheduleSuccessDismissalAttempt(generation: generation, after: 0.2)
+                return
+            }
+
             self.requestClose()
         }
     }
@@ -101,6 +128,7 @@ final class InitialSetupWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         dismissalGeneration &+= 1
+        isSuccessDismissalScheduled = false
         appState?.initialSetupDidDismiss()
 
         guard !MainWindowController.shared.isVisible,

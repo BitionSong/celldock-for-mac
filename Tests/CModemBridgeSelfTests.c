@@ -4,6 +4,18 @@
 #include <stdio.h>
 
 int main(void) {
+    char vendor_name[64] = "unexpected";
+    char product_name[64] = "unexpected";
+    assert(celldock_modem_copy_usb_names(
+        0,
+        vendor_name,
+        sizeof(vendor_name),
+        product_name,
+        sizeof(product_name)
+    ) == 0);
+    assert(vendor_name[0] == '\0');
+    assert(product_name[0] == '\0');
+
     size_t discovered_count = celldock_modem_copy_devices(NULL, 0);
     CellDockModemDevice discovered[8] = {0};
     size_t copied_count = celldock_modem_copy_devices(discovered, 8);
@@ -12,6 +24,13 @@ int main(void) {
     for (size_t index = 0; index < inspected_count; index++) {
         assert(discovered[index].location_id != 0);
         assert(discovered[index].vendor_id == 0x2C7C || discovered[index].vendor_id == 0x2CA3);
+        assert(celldock_modem_copy_usb_names(
+            discovered[index].location_id,
+            vendor_name,
+            sizeof(vendor_name),
+            product_name,
+            sizeof(product_name)
+        ) == 1);
         if (index > 0) {
             assert(discovered[index - 1].location_id < discovered[index].location_id);
         }

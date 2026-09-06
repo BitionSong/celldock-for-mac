@@ -1446,7 +1446,7 @@ struct SIMManagementView: View {
             Divider()
             informationRow(title: "数据服务", value: dataServiceText, valueColor: dataServiceColor)
             Divider()
-            informationRow(title: "语音服务", value: voiceServiceText, valueColor: voiceServiceColor)
+            informationRow(title: "运营商语音服务", value: voiceServiceText, valueColor: voiceServiceColor)
             Divider()
             informationRow(title: "短信服务", value: messageServiceText)
         }
@@ -1458,6 +1458,22 @@ struct SIMManagementView: View {
             informationRow(title: "模块状态", value: moduleStatusText, valueColor: moduleStatusColor)
             Divider()
             informationRow(title: "USB 标识", value: selectedModem.usbIdentity ?? L10n.tr("尚未读取"))
+            Divider()
+            informationRow(title: "USB 厂商", value: selectedModem.usbVendorName ?? L10n.tr("尚未读取"))
+            Divider()
+            informationRow(title: "USB 产品", value: selectedModem.usbProductName ?? L10n.tr("尚未读取"))
+            Divider()
+            informationRow(title: "设备类型", value: hardwareFamilyText)
+            Divider()
+            informationRow(title: "固件版本", value: selectedModem.firmwareVersion ?? L10n.tr("尚未读取"))
+            Divider()
+            informationRow(
+                title: "语音硬件能力",
+                value: voiceCapabilityText,
+                valueColor: voiceCapabilityColor
+            )
+            Divider()
+            informationRow(title: "语音实现", value: voiceBackendText)
             Divider()
             informationRow(
                 title: "联网模式",
@@ -1723,6 +1739,46 @@ struct SIMManagementView: View {
         case .available: return .green
         case .likelyDataOnly: return .orange
         case .unavailable, .unknown: return .secondary
+        }
+    }
+
+    private var hardwareFamilyText: String {
+        switch selectedModem.hardwareFamily {
+        case .quectelNativeVoice: return L10n.tr("Quectel 原生语音模块")
+        case .baiwangInjectedVoice: return L10n.tr("Baiwang 动态语音模块")
+        case .unknown: return L10n.tr("未识别")
+        }
+    }
+
+    private var voiceCapabilityText: String {
+        switch selectedModem.voiceCapability {
+        case .unknown: return L10n.tr("尚未探测")
+        case .probing: return L10n.tr("正在探测")
+        case let .supported(_, verified):
+            return verified ? L10n.tr("支持 · 已通话验证") : L10n.tr("支持 · 尚未通话验证")
+        case let .unsupported(reason): return L10n.tr("不支持 · %@", reason)
+        case let .probeFailed(reason): return L10n.tr("探测失败 · %@", reason)
+        case let .initializationFailed(reason): return L10n.tr("初始化失败 · %@", reason)
+        }
+    }
+
+    private var voiceCapabilityColor: Color {
+        switch selectedModem.voiceCapability {
+        case .supported: return .green
+        case .probing: return .blue
+        case .unsupported: return .secondary
+        case .probeFailed, .initializationFailed: return .red
+        case .unknown: return .secondary
+        }
+    }
+
+    private var voiceBackendText: String {
+        guard case let .supported(backend, _) = selectedModem.voiceCapability else {
+            return L10n.tr("未选择")
+        }
+        switch backend {
+        case .nativeQPCMV: return L10n.tr("原生 QPCMV")
+        case .injectedQDC507: return L10n.tr("QDC507 动态注入")
         }
     }
 

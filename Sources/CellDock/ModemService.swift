@@ -1099,45 +1099,150 @@ final class ModemService {
 
     func configureECM(completion: @escaping (ModemActionResult) -> Void) {
         queue.async { [weak self] in
-            guard let self, self.isOpen else {
-                DispatchQueue.main.async { completion(.failure(L10n.tr("请先插入 QDC507 模块。"))) }
+            guard let self, self.isOpen, let modem = self.modem else {
+                DispatchQueue.main.async { completion(.failure(L10n.tr("请先插入蜂窝模块。"))) }
                 return
             }
-            guard !self.callSnapshot.hasCall else {
+            guard celldock_modem_vendor_id(modem) == 0x2C7C,
+                  celldock_modem_product_id(modem) == 0x0125,
+                  self.connectedModemMatchesExpectedIdentity() else {
+                DispatchQueue.main.async {
+                    completion(.failure(L10n.tr("当前 AT 接口不是已锁定的 2C7C:0125 模块，未执行配置。")))
+                }
+                return
+            }
+            guard self.snapshot.hardwareFamily != .unknown else {
+                DispatchQueue.main.async {
+                    completion(.failure(L10n.tr("USB 厂商和产品字符串无法识别，未执行持久配置写入。")))
+                }
+                return
+            }
+            guard !self.callSnapshot.hasCall,
+                  !self.hasPendingMediaCleanup,
+                  !self.callActionInFlight else {
                 DispatchQueue.main.async { completion(.failure(L10n.tr("通话期间不能重启或切换模块网络模式。"))) }
                 return
             }
-
-            let query = self.command("AT+QCFG=\"usbnet\"", timeout: 3_000)
-            guard query.isSuccess,
-                  let currentMode = ATResponseParser.parseUSBNetMode(query.output),
-                  currentMode == 0 || currentMode == 1 else {
-                DispatchQueue.main.async { completion(.failure(L10n.tr("无法可靠读取当前 usbnet 模式，未执行写入。"))) }
-                return
-            }
-            if currentMode == 1 {
-                DispatchQueue.main.async { completion(.success(L10n.tr("模块已经是 CDC-ECM 模式。"))) }
-                return
-            }
-
-            let write = self.command("AT+QCFG=\"usbnet\",1", timeout: 5_000)
-            guard write.isSuccess else {
+            guard case .empty = self.queryCallPresence() else {
                 DispatchQueue.main.async {
-                    completion(.failure(write.error ?? L10n.tr("模块拒绝切换到 CDC-ECM 模式。")))
+                    completion(.failure(L10n.tr("无法确认模块中没有语音通话，未执行配置。")))
                 }
                 return
             }
 
-            let verify = self.command("AT+QCFG=\"usbnet\"", timeout: 3_000)
-            guard ATResponseParser.parseUSBNetMode(verify.output) == 1 else {
-                DispatchQueue.main.async { completion(.failure(L10n.tr("CDC-ECM 写入后的读回校验失败，未重启模块。"))) }
+            let configurationQuery = self.command("AT+QCFG=\"USBCFG\"", timeout: 5_000)
+            guard configurationQuery.isSuccess,
+                  let currentConfiguration = ATResponseParser.parseUSBConfiguration(
+                      configurationQuery.output
+                  ) else {
+                DispatchQueue.main.async {
+                    completion(.failure(L10n.tr("无法可靠读取当前 USBCFG，未执行写入。")))
+                }
+                return
+            }
+            let mayWriteFullConfiguration = currentConfiguration.isCellDockTarget ||
+                (self.snapshot.hardwareFamily == .quectelNativeVoice &&
+                    currentConfiguration.isSafeQuectelSource)
+            guard mayWriteFullConfiguration else {
+                DispatchQueue.main.async {
+                    completion(.failure(L10n.tr("当前 USBCFG 不属于已验证的 Quectel 原值或 CellDock 目标值，拒绝写入。")))
+                }
                 return
             }
 
+            let usbNetQuery = self.command("AT+QCFG=\"usbnet\"", timeout: 3_000)
+            guard usbNetQuery.isSuccess,
+                  let currentMode = ATResponseParser.parseUSBNetMode(usbNetQuery.output),
+                  currentMode == 0 || currentMode == 1 else {
+                DispatchQueue.main.async { completion(.failure(L10n.tr("无法可靠读取当前 usbnet 模式，未执行写入。"))) }
+                return
+            }
+
+            let needsUSBNetWrite = currentMode != 1
+            // Native Quectel voice support does not load the QDC507 KO payload,
+            // so ADB is not a runtime prerequisite. All other USB capability
+            // checks remain unchanged.
+            let nativeConfigurationIsReady =
+                self.snapshot.hardwareFamily == .quectelNativeVoice &&
+                currentConfiguration.supportsNativeQuectelRuntime
+            let needsConfigurationWrite = !currentConfiguration.isCellDockTarget &&
+                !nativeConfigurationIsReady
+            guard needsUSBNetWrite || needsConfigurationWrite else {
+                DispatchQueue.main.async {
+                    completion(.success(L10n.tr("模块已经是 CDC-ECM 模式。")))
+                }
+                return
+            }
+
+            // usbnet is written first because a USBCFG change may immediately
+            // tear down and re-enumerate the current USB composite device.
+            if needsUSBNetWrite {
+                let writeUSBNet = self.command("AT+QCFG=\"usbnet\",1", timeout: 5_000)
+                guard writeUSBNet.isSuccess else {
+                    DispatchQueue.main.async {
+                        completion(.failure(writeUSBNet.error ?? L10n.tr("模块拒绝切换到 CDC-ECM 模式。")))
+                    }
+                    return
+                }
+                let verifyUSBNet = self.command("AT+QCFG=\"usbnet\"", timeout: 3_000)
+                guard verifyUSBNet.isSuccess,
+                      ATResponseParser.parseUSBNetMode(verifyUSBNet.output) == 1 else {
+                    DispatchQueue.main.async {
+                        completion(.failure(L10n.tr("CDC-ECM 写入后的读回校验失败，未继续修改 USB 配置。")))
+                    }
+                    return
+                }
+            }
+
+            if needsConfigurationWrite {
+                let writeConfiguration = self.command(
+                    ModemUSBConfiguration.cellDockFullTarget.usbcfgWriteCommand,
+                    timeout: 8_000
+                )
+                if writeConfiguration.isTransportAmbiguous {
+                    self.beginExpectedModuleRestart()
+                    DispatchQueue.main.async {
+                        completion(.failure(L10n.tr("USBCFG 写入响应不明确，CellDock 未自动重试；正在等待 USB 重新枚举并回读实际状态。")))
+                    }
+                    return
+                }
+                guard writeConfiguration.isSuccess else {
+                    DispatchQueue.main.async {
+                        completion(.failure(writeConfiguration.error ?? L10n.tr("模块拒绝写入完整 USB 配置。")))
+                    }
+                    return
+                }
+                let verifyConfiguration = self.command("AT+QCFG=\"USBCFG\"", timeout: 5_000)
+                if verifyConfiguration.isTransportAmbiguous {
+                    self.beginExpectedModuleRestart()
+                    DispatchQueue.main.async {
+                        completion(.failure(L10n.tr("USBCFG 已写入，但模块在回读前重新枚举；CellDock 不会重复写入，将在重连后核对。")))
+                    }
+                    return
+                }
+                guard verifyConfiguration.isSuccess,
+                      ATResponseParser.parseUSBConfiguration(
+                          verifyConfiguration.output
+                      )?.isCellDockTarget == true else {
+                    DispatchQueue.main.async {
+                        completion(.failure(L10n.tr("USBCFG 写入后的精确读回校验失败，未重启模块。")))
+                    }
+                    return
+                }
+            }
+
+            self.snapshot.usbConfiguration = needsConfigurationWrite
+                ? .cellDockFullTarget
+                : currentConfiguration
+            self.snapshot.usbNetMode = 1
             _ = self.command("AT+CFUN=1,1", timeout: 1_000)
             self.beginExpectedModuleRestart()
             DispatchQueue.main.async {
-                completion(.success(L10n.tr("已切换 CDC-ECM，模块正在重新枚举。")))
+                completion(.success(
+                    needsConfigurationWrite
+                        ? L10n.tr("已写入完整 USB 配置并启用 CDC-ECM，模块正在重新枚举。")
+                        : L10n.tr("已切换 CDC-ECM，模块正在重新枚举。")
+                ))
             }
         }
     }
@@ -2558,13 +2663,24 @@ final class ModemService {
             if let primary = calls.first { applyCallInfo(primary) }
             callSnapshot.audioActive = false
             callSnapshot.lastError = L10n.tr("检测到模块中已有通话；为安全起见未自动接管麦克风，请先挂断。")
+            let locationID = modem.map { celldock_modem_location_id($0) } ?? 0
+            let usbNames = ModemUSBIdentityResolver.names(for: locationID)
             snapshot = ModemSnapshot(
                 state: .connected,
                 usbIdentity: modem.map {
                     String(format: "%04X:%04X", celldock_modem_vendor_id($0), celldock_modem_product_id($0))
                 },
-                usbLocationID: modem.map { celldock_modem_location_id($0) },
+                usbLocationID: locationID == 0 ? nil : locationID,
                 usbRegistryID: modem.map { celldock_modem_registry_id($0) },
+                usbVendorName: usbNames.vendor,
+                usbProductName: usbNames.product,
+                hardwareFamily: .classify(
+                    vendorName: usbNames.vendor,
+                    productName: usbNames.product
+                ),
+                voiceCapability: .probeFailed(
+                    reason: L10n.tr("模块中已有通话，未执行启动语音能力探测。")
+                ),
                 endpointDescription: modem.map {
                     String(
                         format: "AT #2 · OUT 0x%02X · IN 0x%02X",
@@ -2626,12 +2742,22 @@ final class ModemService {
         let isRestartReconnect = expectedRestartStartedAt != nil
         cancelQDCInitializationRetry()
         didQuerySIMIdentity = false
+        let usbLocationID = celldock_modem_location_id(modem)
+        let usbNames = ModemUSBIdentityResolver.names(for: usbLocationID)
+        let hardwareFamily = ModemHardwareFamily.classify(
+            vendorName: usbNames.vendor,
+            productName: usbNames.product
+        )
         snapshot = ModemSnapshot(
             state: .connecting,
             lifecyclePhase: isRestartReconnect ? .reconnecting : .normal,
             usbIdentity: String(format: "%04X:%04X", celldock_modem_vendor_id(modem), celldock_modem_product_id(modem)),
-            usbLocationID: celldock_modem_location_id(modem),
+            usbLocationID: usbLocationID,
             usbRegistryID: celldock_modem_registry_id(modem),
+            usbVendorName: usbNames.vendor,
+            usbProductName: usbNames.product,
+            hardwareFamily: hardwareFamily,
+            voiceCapability: hardwareFamily == .unknown ? .unknown : .probing,
             simState: .initializing,
             endpointDescription: String(
                 format: "AT #2 · OUT 0x%02X · IN 0x%02X",
@@ -2672,16 +2798,19 @@ final class ModemService {
                 return upper != "OK" && upper != "ERROR" && upper != "AT+QGMR"
             }
             .joined(separator: " ")
-        let pcmCapability = command("AT+QPCMV=?", timeout: 3_000)
-        let supportsRawPCM = pcmCapability.isSuccess &&
-            CallATParser.testResponseSupportsRawPCM(pcmCapability.output) &&
+        snapshot.firmwareVersion = firmwareIdentity.isEmpty ? nil : firmwareIdentity
+        let pcmCapability: CommandResult? = hardwareFamily == .quectelNativeVoice
+            ? command("AT+QPCMV=?", timeout: 3_000)
+            : nil
+        let supportsRawPCM = pcmCapability?.isSuccess == true &&
+            CallATParser.testResponseSupportsRawPCM(pcmCapability?.output ?? "") &&
             modemLocationID != 0
         var mediaAvailable = false
         var mediaError: String?
         var shouldRetryQDCInitialization = false
         moduleVoiceRuntime = nil
         switch CallATParser.preferredMediaBackend(
-            firmwareIdentity: firmwareIdentity,
+            hardwareFamily: hardwareFamily,
             supportsRawPCM: supportsRawPCM,
             hasUSBLocation: modemLocationID != 0
         ) {
@@ -2696,9 +2825,16 @@ final class ModemService {
                 moduleVoiceRuntime = runtime
                 callMediaBackend = .qdcUAC
                 mediaAvailable = true
+                snapshot.voiceCapability = .supported(
+                    backend: .injectedQDC507,
+                    verified: false
+                )
             } catch {
                 callMediaBackend = .none
                 mediaError = L10n.error("QDC507 通话组件尚不可用：%@", underlying: error)
+                snapshot.voiceCapability = .initializationFailed(
+                    reason: mediaError ?? L10n.tr("Baiwang 语音组件初始化失败。")
+                )
                 shouldRetryQDCInitialization = ADBModuleController.isInterfaceBusyError(error)
             }
         case .qpcmv:
@@ -2706,12 +2842,44 @@ final class ModemService {
             if reset.isSuccess {
                 callMediaBackend = .qpcmv
                 mediaAvailable = true
+                snapshot.voiceCapability = .supported(
+                    backend: .nativeQPCMV,
+                    verified: false
+                )
             } else {
                 callMediaBackend = .none
                 mediaError = reset.error ?? L10n.tr("无法重置 USB 语音会话。")
+                snapshot.voiceCapability = .initializationFailed(
+                    reason: mediaError ?? L10n.tr("原生 QPCMV 初始化失败。")
+                )
             }
         case .none:
             callMediaBackend = .none
+            switch hardwareFamily {
+            case .quectelNativeVoice:
+                if let pcmCapability, pcmCapability.isSuccess {
+                    snapshot.voiceCapability = .unsupported(
+                        reason: L10n.tr("AT+QPCMV=? 未报告 CellDock 所需的原始 PCM 模式。")
+                    )
+                } else if let pcmCapability,
+                          pcmCapability.output.uppercased().contains("ERROR") {
+                    snapshot.voiceCapability = .unsupported(
+                        reason: L10n.tr("当前 Quectel 固件不支持 AT+QPCMV。")
+                    )
+                } else {
+                    snapshot.voiceCapability = .probeFailed(
+                        reason: pcmCapability?.error ?? L10n.tr("无法完成 AT+QPCMV 能力探测。")
+                    )
+                }
+            case .baiwangInjectedVoice:
+                snapshot.voiceCapability = .initializationFailed(
+                    reason: L10n.tr("Baiwang 动态语音后端不可用。")
+                )
+            case .unknown:
+                snapshot.voiceCapability = .probeFailed(
+                    reason: L10n.tr("USB 厂商和产品字符串无法识别，未选择语音后端。")
+                )
+            }
         }
         pcmSessionEnabled = false
         callSnapshot = CallSnapshot(
@@ -2798,7 +2966,12 @@ final class ModemService {
                 phase: .idle,
                 voiceOverUSBSupported: true
             )
+            snapshot.voiceCapability = .supported(
+                backend: .injectedQDC507,
+                verified: false
+            )
             cancelQDCInitializationRetry()
+            publishSnapshot(snapshot)
             publishCallSnapshot()
         } catch {
             callMediaBackend = .none
@@ -2809,6 +2982,10 @@ final class ModemService {
                 underlying: error
             )
             callSnapshot.controlInterfaceBusy = ADBModuleController.isInterfaceBusyError(error)
+            snapshot.voiceCapability = .initializationFailed(
+                reason: callSnapshot.lastError ?? L10n.tr("Baiwang 语音组件初始化失败。")
+            )
+            publishSnapshot(snapshot)
             publishCallSnapshot()
             if ADBModuleController.isInterfaceBusyError(error) {
                 scheduleQDCInitializationRetry()

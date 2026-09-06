@@ -6,6 +6,12 @@ struct DiscoveredModemDevice: Equatable, Identifiable {
     let productID: UInt16
     let locationID: UInt32
     let registryID: UInt64
+    let usbVendorName: String?
+    let usbProductName: String?
+
+    var hardwareFamily: ModemHardwareFamily {
+        .classify(vendorName: usbVendorName, productName: usbProductName)
+    }
 
     var id: UInt32 { locationID }
 
@@ -19,6 +25,40 @@ struct DiscoveredModemDevice: Equatable, Identifiable {
 
     var locationDescription: String {
         String(format: "0x%08X", locationID)
+    }
+}
+
+struct ModemUSBNames: Equatable {
+    let vendor: String?
+    let product: String?
+}
+
+enum ModemUSBIdentityResolver {
+    static func names(for locationID: UInt32) -> ModemUSBNames {
+        var vendor = [CChar](repeating: 0, count: 128)
+        var product = [CChar](repeating: 0, count: 128)
+        let found = vendor.withUnsafeMutableBufferPointer { vendorBuffer in
+            product.withUnsafeMutableBufferPointer { productBuffer in
+                celldock_modem_copy_usb_names(
+                    locationID,
+                    vendorBuffer.baseAddress,
+                    vendorBuffer.count,
+                    productBuffer.baseAddress,
+                    productBuffer.count
+                )
+            }
+        }
+        guard found == 1 else { return ModemUSBNames(vendor: nil, product: nil) }
+        return ModemUSBNames(
+            vendor: normalizedString(from: vendor),
+            product: normalizedString(from: product)
+        )
+    }
+
+    private static func normalizedString(from buffer: [CChar]) -> String? {
+        let value = String(cString: buffer)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 }
 
@@ -91,11 +131,14 @@ final class ModemInventoryService {
                 continue
             }
             return rawDevices.prefix(discoveredCount).map { device in
-                DiscoveredModemDevice(
+                let names = ModemUSBIdentityResolver.names(for: device.location_id)
+                return DiscoveredModemDevice(
                     vendorID: device.vendor_id,
                     productID: device.product_id,
                     locationID: device.location_id,
-                    registryID: device.registry_id
+                    registryID: device.registry_id,
+                    usbVendorName: names.vendor,
+                    usbProductName: names.product
                 )
             }
         }

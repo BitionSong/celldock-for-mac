@@ -99,14 +99,16 @@ else
 fi
 OUTPUT_DIR="$ROOT/outputs"
 APP="$OUTPUT_DIR/CellDock.app"
-ZIP="$OUTPUT_DIR/CellDock-$VERSION-arm64$ARCHIVE_SUFFIX.zip"
-PUBLISH_ZIP="$OUTPUT_DIR/.CellDock-$VERSION-arm64$ARCHIVE_SUFFIX.$$.zip"
+ARCHIVE_ARCH="universal"
+BUILD_ARCH_OPTIONS=(--arch arm64 --arch x86_64)
+ZIP="$OUTPUT_DIR/CellDock-$VERSION-$ARCHIVE_ARCH$ARCHIVE_SUFFIX.zip"
+PUBLISH_ZIP="$OUTPUT_DIR/.CellDock-$VERSION-$ARCHIVE_ARCH$ARCHIVE_SUFFIX.$$.zip"
 STAGE_DIR="$(mktemp -d /tmp/CellDock-build.XXXXXX)"
 STAGE_PACKAGE_DIR="$STAGE_DIR/package"
 STAGE_APP="$STAGE_PACKAGE_DIR/CellDock.app"
 SPARKLE_FRAMEWORK_SOURCE="$ROOT/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 SPARKLE_FRAMEWORK_RELATIVE="Contents/Frameworks/Sparkle.framework"
-STAGE_ZIP="$STAGE_DIR/CellDock-$VERSION-arm64$ARCHIVE_SUFFIX.zip"
+STAGE_ZIP="$STAGE_DIR/CellDock-$VERSION-$ARCHIVE_ARCH$ARCHIVE_SUFFIX.zip"
 VERIFY_DIR="$STAGE_DIR/verify"
 VERIFY_APP="$VERIFY_DIR/CellDock.app"
 HELPER_RELATIVE="Contents/Library/PrivilegedHelperTools/CellDockNetworkHelper"
@@ -121,10 +123,10 @@ trap cleanup EXIT
 cd "$ROOT"
 swift build --disable-sandbox -Xswiftc -disable-sandbox \
   -c release \
-  --arch arm64
+  "${BUILD_ARCH_OPTIONS[@]}"
 BIN_DIR="$(swift build --disable-sandbox -Xswiftc -disable-sandbox \
   -c release \
-  --arch arm64 \
+  "${BUILD_ARCH_OPTIONS[@]}" \
   --show-bin-path)"
 
 mkdir -p "$OUTPUT_DIR"
@@ -143,8 +145,7 @@ cp "$ROOT/Resources/sim1.svg" "$STAGE_APP/Contents/Resources/sim1.svg"
 cp "$ROOT/Resources/celldock-module-vertical.svg" "$STAGE_APP/Contents/Resources/celldock-module-vertical.svg"
 cp -R "$ROOT/Resources/Localization/"*.lproj "$STAGE_APP/Contents/Resources/"
 mkdir -p "$STAGE_APP/Contents/Resources/Sounds"
-cp "$ROOT/Resources/Sounds/bleeps.wav" "$STAGE_APP/Contents/Resources/Sounds/bleeps.wav"
-cp "$ROOT/Resources/Sounds/ring.mp3" "$STAGE_APP/Contents/Resources/Sounds/ring.mp3"
+cp "$ROOT/Resources/Sounds/"* "$STAGE_APP/Contents/Resources/Sounds/"
 if [[ -d "$ROOT/Resources/ModuleVoice" ]]; then
   xcrun swift "$ROOT/scripts/build_module_voice_payload.swift" \
     "$ROOT/Resources/ModuleVoice" \
@@ -339,12 +340,11 @@ cmp -s \
   print -u2 "Packaged device module SVG does not match the source resource."
   exit 1
 }
-cmp \
-  "$ROOT/Resources/Sounds/bleeps.wav" \
-  "$VERIFY_APP/Contents/Resources/Sounds/bleeps.wav"
-cmp \
-  "$ROOT/Resources/Sounds/ring.mp3" \
-  "$VERIFY_APP/Contents/Resources/Sounds/ring.mp3"
+for sound_file in "$ROOT/Resources/Sounds/"*; do
+  cmp \
+    "$sound_file" \
+    "$VERIFY_APP/Contents/Resources/Sounds/${sound_file:t}"
+done
 for language in zh-Hans en ja fr; do
   localization_dir="$VERIFY_APP/Contents/Resources/$language.lproj"
   [[ -d "$localization_dir" ]] || {
@@ -368,12 +368,14 @@ if [[ -d "$ROOT/Resources/ModuleVoice" ]]; then
   fi
 fi
 
-[[ "$(lipo -archs "$VERIFY_BINARY")" == "arm64" ]] || {
-  print -u2 "Archive executable is not thin arm64."
+VERIFY_BINARY_ARCHS=" $(lipo -archs "$VERIFY_BINARY") "
+[[ "$VERIFY_BINARY_ARCHS" == *" arm64 "* && "$VERIFY_BINARY_ARCHS" == *" x86_64 "* ]] || {
+  print -u2 "Archive executable is not Universal 2 (arm64 + x86_64)."
   exit 1
 }
-[[ "$(lipo -archs "$VERIFY_HELPER")" == "arm64" ]] || {
-  print -u2 "Archive helper is not thin arm64."
+VERIFY_HELPER_ARCHS=" $(lipo -archs "$VERIFY_HELPER") "
+[[ "$VERIFY_HELPER_ARCHS" == *" arm64 "* && "$VERIFY_HELPER_ARCHS" == *" x86_64 "* ]] || {
+  print -u2 "Archive helper is not Universal 2 (arm64 + x86_64)."
   exit 1
 }
 VERIFY_VOWIFI_ARCHS=" $(lipo -archs "$VERIFY_VOWIFI_RUNTIME") "
@@ -448,6 +450,6 @@ fi
 rm -rf -- "$APP"
 find "$OUTPUT_DIR" -maxdepth 1 -type d -name 'CellDock.previous.*.app' \
   -exec rm -rf -- {} +
-find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'CellDock-*-arm64.zip.previous.*' \
+find "$OUTPUT_DIR" -maxdepth 1 -type f -name 'CellDock-*-universal.zip.previous.*' \
   -exec rm -f -- {} +
 print "Verified archive: $ZIP"

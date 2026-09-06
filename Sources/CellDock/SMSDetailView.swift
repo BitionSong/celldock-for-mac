@@ -33,26 +33,10 @@ struct SMSDetailView: View {
                 }
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if let code = message.verificationCode {
-                            if appState.isPresentationPrivacyEnabled {
-                                Label(L10n.tr("验证码已隐藏"), systemImage: "eye.slash.fill")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                VerificationCodeBadge(code: code) {
-                                    appState.markRead(message)
-                                }
-                            }
-                        }
-                        Text(verbatim: appState.privacyPresentation.messageText(message.body))
-                            .font(.body)
-                            .lineSpacing(4)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .topLeading)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(16)
+                    SMSMessageContentView(message: message, onOpenDialer: close)
+                        .font(.body)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(16)
                 }
                 .adaptiveGlassSurface(cornerRadius: 16, treatment: .clear)
 

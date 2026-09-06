@@ -3,6 +3,7 @@ import SwiftUI
 
 struct VerificationCodeBadge: View {
     let code: String
+    var isOnAccentBackground = false
     var onCopy: (() -> Void)?
 
     @State private var copied = false
@@ -13,16 +14,19 @@ struct VerificationCodeBadge: View {
             copyCode()
         } label: {
             HStack(spacing: 4) {
-                Image(systemName: copied ? "checkmark" : "key.fill")
+                Image(systemName: "key.fill")
                     .font(.system(size: 9, weight: .bold))
-                Text(code)
+                Text(verbatim: code)
                     .font(.caption.monospaced().weight(.semibold))
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 10, weight: .semibold))
             }
-            .foregroundStyle(copied ? Color.green : Color.accentColor)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
+            .foregroundStyle(isOnAccentBackground ? Color.white : (copied ? Color.green : Color.accentColor))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
             .background(
-                (copied ? Color.green : Color.accentColor).opacity(0.12),
+                (isOnAccentBackground ? Color.white : (copied ? Color.green : Color.accentColor))
+                    .opacity(isOnAccentBackground ? 0.2 : 0.12),
                 in: Capsule()
             )
             .contentShape(Capsule())

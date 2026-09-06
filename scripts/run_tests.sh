@@ -31,6 +31,7 @@ swiftc \
   "$ROOT/Sources/CellDock/CellularModuleID.swift" \
   "$ROOT/Sources/CellDock/CallModels.swift" \
   "$ROOT/Sources/CellDock/CallHistoryStore.swift" \
+  "$ROOT/Sources/CellDock/CallToneSynthesizer.swift" \
   "$ROOT/Sources/CellDock/PhoneNumberNormalizer.swift" \
   "$ROOT/Sources/CellDock/PrivacyPresentation.swift" \
   "$ROOT/Sources/CellDock/CallATParser.swift" \
@@ -67,6 +68,15 @@ swiftc \
   -o "$ROOT/.build/self-tests/CellDockSelfTests"
 
 "$ROOT/.build/self-tests/CellDockSelfTests"
+
+swiftc \
+  -swift-version 5 \
+  "$ROOT/Sources/CellDock/SMSVerificationCode.swift" \
+  "$ROOT/Sources/CellDock/SMSContentDetector.swift" \
+  "$ROOT/Tests/SMSContentSelfTests/main.swift" \
+  -o "$ROOT/.build/self-tests/SMSContentSelfTests"
+
+"$ROOT/.build/self-tests/SMSContentSelfTests"
 
 swiftc \
   -swift-version 5 \

@@ -8,6 +8,7 @@ final class AppTerminationDelegate: NSObject, NSApplicationDelegate {
     private weak var appState: AppState?
     private var didFinishLaunching = false
     private var didShowInitialCommunicationWindow = false
+    private var didScheduleStartupPermissionRequest = false
 
     func configure(appState: AppState) {
         self.appState = appState
@@ -15,6 +16,7 @@ final class AppTerminationDelegate: NSObject, NSApplicationDelegate {
         if didFinishLaunching {
             menuBarPanelController?.start()
             showInitialCommunicationWindowIfNeeded()
+            scheduleStartupPermissionRequestIfNeeded()
         }
     }
 
@@ -24,6 +26,7 @@ final class AppTerminationDelegate: NSObject, NSApplicationDelegate {
         didFinishLaunching = true
         menuBarPanelController?.start()
         showInitialCommunicationWindowIfNeeded()
+        scheduleStartupPermissionRequestIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -49,6 +52,14 @@ final class AppTerminationDelegate: NSObject, NSApplicationDelegate {
         didShowInitialCommunicationWindow = true
         DispatchQueue.main.async {
             appState.showMessagesWindow()
+        }
+    }
+
+    private func scheduleStartupPermissionRequestIfNeeded() {
+        guard !didScheduleStartupPermissionRequest else { return }
+        didScheduleStartupPermissionRequest = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.appState?.requestStartupPermissionsIfNeeded()
         }
     }
 }

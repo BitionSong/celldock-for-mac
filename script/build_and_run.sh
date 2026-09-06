@@ -84,6 +84,8 @@ cp "$ROOT_DIR/Resources/app.mavo.celldock.network.helper.plist" \
   "$DAEMON_DIR/app.mavo.celldock.network.helper.plist"
 cp "$ROOT_DIR/Resources/CellDock.icns" "$APP_RESOURCES/CellDock.icns"
 cp -R "$ROOT_DIR/Resources/Localization/"*.lproj "$APP_RESOURCES/"
+mkdir -p "$APP_RESOURCES/Sounds"
+cp "$ROOT_DIR/Resources/Sounds/"* "$APP_RESOURCES/Sounds/"
 if [[ -d "$ROOT_DIR/Resources/ModuleVoice" ]]; then
   xcrun swift "$ROOT_DIR/scripts/build_module_voice_payload.swift" \
     "$ROOT_DIR/Resources/ModuleVoice" \

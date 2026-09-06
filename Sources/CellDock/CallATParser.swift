@@ -134,15 +134,19 @@ enum CallATParser {
     }
 
     static func preferredMediaBackend(
-        firmwareIdentity: String,
+        hardwareFamily: ModemHardwareFamily,
         supportsRawPCM: Bool,
         hasUSBLocation: Bool
     ) -> PreferredCallMediaBackend {
         guard hasUSBLocation else { return .none }
-        if firmwareIdentity.uppercased().contains("QDC507") {
+        switch hardwareFamily {
+        case .baiwangInjectedVoice:
             return .qdcModuleBridge
+        case .quectelNativeVoice:
+            return supportsRawPCM ? .qpcmv : .none
+        case .unknown:
+            return .none
         }
-        return supportsRawPCM ? .qpcmv : .none
     }
 
     private static func normalizedLines(_ value: String) -> [String] {

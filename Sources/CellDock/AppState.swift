@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Combine
 import Foundation
 import CellDockNetworkIPC
@@ -82,6 +83,7 @@ final class AppState: ObservableObject {
     private let messageStore = MessageStore()
     private let launchAtLoginController = LaunchAtLoginController()
     private var started = false
+    private var notificationAuthorizationCompletions: [() -> Void] = []
     private var lastEUICCProbeIdentity: String?
     private var activeModemLocationID: UInt32?
     private var deletingMessageIDs: Set<SMSMessage.ID> = []
@@ -344,6 +346,9 @@ final class AppState: ObservableObject {
                     usbIdentity: device.usbIdentity,
                     usbLocationID: device.locationID,
                     usbRegistryID: device.registryID,
+                    usbVendorName: device.usbVendorName,
+                    usbProductName: device.usbProductName,
+                    hardwareFamily: device.hardwareFamily,
                     simState: .initializing,
                     endpointDescription: "USB location \(device.locationDescription)",
                     lastError: L10n.tr("模组已被 IOKit 发现，正在建立独立 AT 监控会话。")
@@ -543,8 +548,6 @@ final class AppState: ObservableObject {
         if isPresentationPrivacyEnabled {
             NotificationService.shared.clearSensitiveNotifications()
         }
-        requestNotificationAuthorization()
-
         euiccService.onSnapshot = { [weak self] snapshot in
             guard let self else { return }
             self.handleEUICCSnapshot(snapshot, moduleID: self.activeCommunicationModuleID)
@@ -1019,6 +1022,15 @@ final class AppState: ObservableObject {
             activeCallModuleID = nil
         }
         scheduleCellularLinkRecoveryIfNeeded()
+
+        if CallTonePolicy.wantsOutgoingRingback(for: taggedSnapshot) {
+            alertSounds.startOutgoingRingback()
+        } else {
+            alertSounds.stopOutgoingRingback()
+        }
+        if CallTonePolicy.wantsHangupTone(for: completedCall) {
+            alertSounds.playHangupTone()
+        }
 
         if taggedSnapshot.phase == .incoming {
             if shouldNotify {
@@ -2086,7 +2098,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    func requestNotificationAuthorization() {
+    func requestNotificationAuthorization(completion: (() -> Void)? = nil) {
+        if let completion {
+            notificationAuthorizationCompletions.append(completion)
+        }
         guard !isRequestingNotificationAuthorization else { return }
         isRequestingNotificationAuthorization = true
         NotificationService.shared.requestAuthorization { [weak self] status, error in
@@ -2096,7 +2111,34 @@ final class AppState: ObservableObject {
             if let error {
                 self.presentTransientMessage(error, isError: true)
             }
+            let completions = self.notificationAuthorizationCompletions
+            self.notificationAuthorizationCompletions.removeAll(keepingCapacity: false)
+            completions.forEach { $0() }
         }
+    }
+
+    /// Requests first-run permissions only after the app has finished launching
+    /// and has a visible window. System prompts are serialized so the
+    /// microphone sheet never competes with the notification alert.
+    func requestStartupPermissionsIfNeeded() {
+        NotificationService.shared.authorizationStatus { [weak self] status in
+            guard let self else { return }
+            self.notificationAuthorizationStatus = status
+            if status == .notDetermined {
+                self.requestNotificationAuthorization { [weak self] in
+                    self?.requestMicrophoneAuthorizationIfNeeded()
+                }
+            } else {
+                self.requestMicrophoneAuthorizationIfNeeded()
+            }
+        }
+    }
+
+    private func requestMicrophoneAuthorizationIfNeeded() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined else {
+            return
+        }
+        AVCaptureDevice.requestAccess(for: .audio) { _ in }
     }
 
     func openNotificationSettings() {
@@ -2679,7 +2721,7 @@ final class AppState: ObservableObject {
         }
         initialSetupPromptTask?.cancel()
         initialSetupPromptTask = nil
-        if initialSetupPresentationIsActive {
+        if initialSetupPresentationIsActive || InitialSetupWindowController.shared.isVisible {
             InitialSetupWindowController.shared.scheduleDismissAfterSuccess()
         }
     }

@@ -2,6 +2,22 @@ import AVFoundation
 import Combine
 import Foundation
 
+struct BundledAlertSound: Identifiable, Hashable {
+    let id: String
+    let displayNameKey: String
+    let duration: TimeInterval
+    fileprivate let resourceName: String
+    fileprivate let resourceExtension: String
+
+    var displayName: String { L10n.tr(displayNameKey) }
+}
+
+enum AlertSoundPreviewState {
+    case stopped
+    case playing
+    case paused
+}
+
 enum AlertSoundKind: String, CaseIterable, Identifiable {
     case message
     case incomingCall
@@ -15,19 +31,81 @@ enum AlertSoundKind: String, CaseIterable, Identifiable {
         }
     }
 
-    fileprivate var bundledResourceName: String {
+    var bundledSounds: [BundledAlertSound] {
         switch self {
-        case .message: return "bleeps"
-        case .incomingCall: return "ring"
+        case .message:
+            return [
+                BundledAlertSound(
+                    id: "classic",
+                    displayNameKey: "默认提示音",
+                    duration: 0.281,
+                    resourceName: "bleeps",
+                    resourceExtension: "wav"
+                ),
+                BundledAlertSound(
+                    id: "notification-09",
+                    displayNameKey: "水滴",
+                    duration: 1.152,
+                    resourceName: "notification-09",
+                    resourceExtension: "mp3"
+                ),
+                BundledAlertSound(
+                    id: "notification-010",
+                    displayNameKey: "清脆",
+                    duration: 1.272,
+                    resourceName: "notification-010",
+                    resourceExtension: "mp3"
+                ),
+                BundledAlertSound(
+                    id: "ping",
+                    displayNameKey: "消息脉冲",
+                    duration: 1.128,
+                    resourceName: "message-ping",
+                    resourceExtension: "mp3"
+                )
+            ]
+        case .incomingCall:
+            return [
+                BundledAlertSound(
+                    id: "classic",
+                    displayNameKey: "经典铃声",
+                    duration: 42.318,
+                    resourceName: "ring",
+                    resourceExtension: "mp3"
+                ),
+                BundledAlertSound(
+                    id: "ringtone-023",
+                    displayNameKey: "晨曦",
+                    duration: 6.922,
+                    resourceName: "ringtone-023",
+                    resourceExtension: "mp3"
+                ),
+                BundledAlertSound(
+                    id: "ringtone-030",
+                    displayNameKey: "涟漪",
+                    duration: 7.758,
+                    resourceName: "ringtone-030",
+                    resourceExtension: "mp3"
+                ),
+                BundledAlertSound(
+                    id: "ringtone-043",
+                    displayNameKey: "星河",
+                    duration: 8.803,
+                    resourceName: "ringtone-043",
+                    resourceExtension: "mp3"
+                ),
+                BundledAlertSound(
+                    id: "ringtone-088",
+                    displayNameKey: "远航",
+                    duration: 8.688,
+                    resourceName: "ringtone-088",
+                    resourceExtension: "mp3"
+                )
+            ]
         }
     }
 
-    fileprivate var bundledResourceExtension: String {
-        switch self {
-        case .message: return "wav"
-        case .incomingCall: return "mp3"
-        }
-    }
+    fileprivate var defaultBundledSound: BundledAlertSound { bundledSounds[0] }
 
     fileprivate var customFileKey: String {
         "CellDock.AlertSound.\(rawValue).customFile.v1"
@@ -35,6 +113,10 @@ enum AlertSoundKind: String, CaseIterable, Identifiable {
 
     fileprivate var customDisplayNameKey: String {
         "CellDock.AlertSound.\(rawValue).displayName.v1"
+    }
+
+    fileprivate var bundledSoundKey: String {
+        "CellDock.AlertSound.\(rawValue).bundledSound.v1"
     }
 }
 
@@ -58,11 +140,15 @@ final class AlertSoundService: ObservableObject {
 
     @Published private(set) var configurationRevision = 0
     @Published private(set) var previewingKind: AlertSoundKind?
+    @Published private(set) var previewingSoundID: String?
+    @Published private(set) var previewState: AlertSoundPreviewState = .stopped
 
     private let defaults = UserDefaults.standard
     private let fileManager = FileManager.default
     private var messagePlayer: AVAudioPlayer?
     private var ringtonePlayer: AVAudioPlayer?
+    private var outgoingRingbackPlayer: AVAudioPlayer?
+    private var hangupPlayer: AVAudioPlayer?
     private var previewPlayer: AVAudioPlayer?
     private var previewStopTask: Task<Void, Never>?
     private var previewGeneration = UUID()
@@ -74,13 +160,59 @@ final class AlertSoundService: ObservableObject {
         if customSoundURL(for: kind) != nil {
             return defaults.string(forKey: kind.customDisplayNameKey) ?? L10n.tr("自定义音频")
         }
-        let fileName = "\(kind.bundledResourceName).\(kind.bundledResourceExtension)"
-        return L10n.tr("默认（%@）", fileName)
+        return selectedBundledSound(for: kind).displayName
     }
 
     func isUsingDefault(_ kind: AlertSoundKind) -> Bool {
         _ = configurationRevision
-        return customSoundURL(for: kind) == nil
+        return customSoundURL(for: kind) == nil &&
+            selectedBundledSound(for: kind).id == kind.defaultBundledSound.id
+    }
+
+    func selectedBundledSoundID(for kind: AlertSoundKind) -> String? {
+        _ = configurationRevision
+        guard customSoundURL(for: kind) == nil else { return nil }
+        return selectedBundledSound(for: kind).id
+    }
+
+    func hasCustomSound(for kind: AlertSoundKind) -> Bool {
+        _ = configurationRevision
+        return customSoundURL(for: kind) != nil
+    }
+
+    func customSoundDuration(for kind: AlertSoundKind) -> TimeInterval? {
+        guard let url = customSoundURL(for: kind),
+              let player = try? AVAudioPlayer(contentsOf: url),
+              player.duration.isFinite else { return nil }
+        return player.duration
+    }
+
+    func selectBundledSound(_ sound: BundledAlertSound, for kind: AlertSoundKind) throws {
+        guard kind.bundledSounds.contains(sound) else { return }
+        guard let url = bundledSoundURL(sound),
+              let validationPlayer = makePlayer(url: url, numberOfLoops: 0) else {
+            throw AlertSoundServiceError.bundledSoundMissing(
+                "\(sound.resourceName).\(sound.resourceExtension)"
+            )
+        }
+        validationPlayer.stop()
+
+        let previousURL = customSoundURL(for: kind)
+        let wasRinging = kind == .incomingCall && ringtonePlayer?.isPlaying == true
+        stopPreview()
+        if kind == .incomingCall {
+            stopIncomingRingtone()
+        }
+        defaults.set(sound.id, forKey: kind.bundledSoundKey)
+        defaults.removeObject(forKey: kind.customFileKey)
+        defaults.removeObject(forKey: kind.customDisplayNameKey)
+        configurationRevision &+= 1
+        if let previousURL {
+            try? fileManager.removeItem(at: previousURL)
+        }
+        if wasRinging {
+            startIncomingRingtone()
+        }
     }
 
     func playMessageAlert() {
@@ -93,6 +225,9 @@ final class AlertSoundService: ObservableObject {
     func startIncomingRingtone() {
         guard ringtonePlayer?.isPlaying != true,
               let url = soundURL(for: .incomingCall) else { return }
+        stopOutgoingRingback()
+        hangupPlayer?.stop()
+        hangupPlayer = nil
         ringtonePlayer = makePlayer(url: url, numberOfLoops: -1)
         ringtonePlayer?.play()
     }
@@ -102,36 +237,107 @@ final class AlertSoundService: ObservableObject {
         ringtonePlayer = nil
     }
 
+    func startOutgoingRingback() {
+        guard outgoingRingbackPlayer?.isPlaying != true else { return }
+        stopIncomingRingtone()
+        hangupPlayer?.stop()
+        hangupPlayer = nil
+        outgoingRingbackPlayer = makePlayer(
+            data: CallToneSynthesizer.wavData(for: .outgoingRingback),
+            numberOfLoops: -1
+        )
+        outgoingRingbackPlayer?.play()
+    }
+
+    func stopOutgoingRingback() {
+        outgoingRingbackPlayer?.stop()
+        outgoingRingbackPlayer = nil
+    }
+
+    func playHangupTone() {
+        stopOutgoingRingback()
+        stopIncomingRingtone()
+        hangupPlayer?.stop()
+        hangupPlayer = makePlayer(
+            data: CallToneSynthesizer.wavData(for: .hangup),
+            numberOfLoops: 0
+        )
+        hangupPlayer?.play()
+    }
+
     func stopAll() {
         messagePlayer?.stop()
         messagePlayer = nil
         stopIncomingRingtone()
+        stopOutgoingRingback()
+        hangupPlayer?.stop()
+        hangupPlayer = nil
         stopPreview()
     }
 
     func togglePreview(for kind: AlertSoundKind) throws {
-        if previewingKind == kind {
-            stopPreview()
+        if let customURL = customSoundURL(for: kind) {
+            try togglePreview(for: kind, soundID: "__custom__", url: customURL)
+        } else {
+            try togglePreview(for: kind, sound: selectedBundledSound(for: kind))
+        }
+    }
+
+    func togglePreview(for kind: AlertSoundKind, sound: BundledAlertSound) throws {
+        guard kind.bundledSounds.contains(sound), let url = bundledSoundURL(sound) else {
+            throw AlertSoundServiceError.bundledSoundMissing(
+                "\(sound.resourceName).\(sound.resourceExtension)"
+            )
+        }
+        try togglePreview(for: kind, soundID: sound.id, url: url)
+    }
+
+    func toggleCustomPreview(for kind: AlertSoundKind) throws {
+        guard let url = customSoundURL(for: kind) else {
+            throw AlertSoundServiceError.invalidAudio
+        }
+        try togglePreview(for: kind, soundID: "__custom__", url: url)
+    }
+
+    func isPreviewPlaying(kind: AlertSoundKind, soundID: String) -> Bool {
+        previewingKind == kind && previewingSoundID == soundID && previewState == .playing
+    }
+
+    private func togglePreview(for kind: AlertSoundKind, soundID: String, url: URL) throws {
+        if previewingKind == kind, previewingSoundID == soundID, let previewPlayer {
+            if previewState == .playing {
+                previewPlayer.pause()
+                previewStopTask?.cancel()
+                previewStopTask = nil
+                previewState = .paused
+            } else {
+                guard previewPlayer.play() else { throw AlertSoundServiceError.invalidAudio }
+                previewState = .playing
+                schedulePreviewStop()
+            }
             return
         }
 
         stopPreview()
-        guard let url = soundURL(for: kind) else {
-            throw AlertSoundServiceError.bundledSoundMissing(
-                "\(kind.bundledResourceName).\(kind.bundledResourceExtension)"
-            )
-        }
         guard let player = makePlayer(url: url, numberOfLoops: 0) else {
             throw AlertSoundServiceError.invalidAudio
         }
 
         previewPlayer = player
         previewingKind = kind
+        previewingSoundID = soundID
+        previewState = .playing
         previewGeneration = UUID()
-        let generation = previewGeneration
         player.play()
 
-        let previewDuration = min(max(player.duration, 0.25), 8)
+        schedulePreviewStop()
+    }
+
+    private func schedulePreviewStop() {
+        guard let player = previewPlayer else { return }
+        previewStopTask?.cancel()
+        let generation = previewGeneration
+        let previewDuration = min(max(player.duration - player.currentTime, 0.25), 8)
         previewStopTask = Task { @MainActor [weak self] in
             try? await Task.sleep(
                 nanoseconds: UInt64(previewDuration * 1_000_000_000)
@@ -205,6 +411,7 @@ final class AlertSoundService: ObservableObject {
         }
         defaults.removeObject(forKey: kind.customFileKey)
         defaults.removeObject(forKey: kind.customDisplayNameKey)
+        defaults.removeObject(forKey: kind.bundledSoundKey)
         configurationRevision &+= 1
         if let previousURL {
             try? fileManager.removeItem(at: previousURL)
@@ -214,17 +421,28 @@ final class AlertSoundService: ObservableObject {
         }
     }
 
-    private func stopPreview() {
+    func stopPreview() {
         previewStopTask?.cancel()
         previewStopTask = nil
         previewPlayer?.stop()
         previewPlayer = nil
         previewingKind = nil
+        previewingSoundID = nil
+        previewState = .stopped
         previewGeneration = UUID()
     }
 
     private func makePlayer(url: URL, numberOfLoops: Int) -> AVAudioPlayer? {
         guard let player = try? AVAudioPlayer(contentsOf: url) else { return nil }
+        return prepare(player, numberOfLoops: numberOfLoops)
+    }
+
+    private func makePlayer(data: Data, numberOfLoops: Int) -> AVAudioPlayer? {
+        guard let player = try? AVAudioPlayer(data: data) else { return nil }
+        return prepare(player, numberOfLoops: numberOfLoops)
+    }
+
+    private func prepare(_ player: AVAudioPlayer, numberOfLoops: Int) -> AVAudioPlayer? {
         player.numberOfLoops = numberOfLoops
         player.volume = 1
         guard player.prepareToPlay() else { return nil }
@@ -232,9 +450,21 @@ final class AlertSoundService: ObservableObject {
     }
 
     private func soundURL(for kind: AlertSoundKind) -> URL? {
-        customSoundURL(for: kind) ?? Bundle.main.url(
-            forResource: kind.bundledResourceName,
-            withExtension: kind.bundledResourceExtension,
+        customSoundURL(for: kind) ?? bundledSoundURL(selectedBundledSound(for: kind))
+    }
+
+    private func selectedBundledSound(for kind: AlertSoundKind) -> BundledAlertSound {
+        guard let selectedID = defaults.string(forKey: kind.bundledSoundKey),
+              let selected = kind.bundledSounds.first(where: { $0.id == selectedID }) else {
+            return kind.defaultBundledSound
+        }
+        return selected
+    }
+
+    private func bundledSoundURL(_ sound: BundledAlertSound) -> URL? {
+        Bundle.main.url(
+            forResource: sound.resourceName,
+            withExtension: sound.resourceExtension,
             subdirectory: "Sounds"
         )
     }

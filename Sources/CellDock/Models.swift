@@ -59,6 +59,46 @@ enum VoiceServiceAvailability: Equatable {
     case unknown
 }
 
+enum ModemHardwareFamily: Equatable {
+    case baiwangInjectedVoice
+    case quectelNativeVoice
+    case unknown
+
+    static func classify(vendorName: String?, productName: String?) -> Self {
+        let vendor = normalizedUSBName(vendorName)
+        let product = normalizedUSBName(productName)
+        // Product wins deliberately: Baiwang devices can carry a Quectel VID,
+        // PID or vendor string after their USB identity has been customized.
+        if product == "BAIWANG" { return .baiwangInjectedVoice }
+        if vendor == "QUECTEL" { return .quectelNativeVoice }
+        return .unknown
+    }
+
+    private static func normalizedUSBName(_ value: String?) -> String? {
+        guard let normalized = value?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased(),
+            !normalized.isEmpty else {
+            return nil
+        }
+        return normalized
+    }
+}
+
+enum ModemVoiceBackend: Equatable {
+    case nativeQPCMV
+    case injectedQDC507
+}
+
+enum ModemVoiceCapability: Equatable {
+    case unknown
+    case probing
+    case supported(backend: ModemVoiceBackend, verified: Bool)
+    case unsupported(reason: String)
+    case probeFailed(reason: String)
+    case initializationFailed(reason: String)
+}
+
 enum CellularDataConnectionState: Equatable {
     case disabled
     case waitingForModem
@@ -84,7 +124,7 @@ struct ModemUSBConfiguration: Equatable {
     let adbEnabled: Bool
     let audioEnabled: Bool
 
-    static let maVoTarget = ModemUSBConfiguration(
+    static let cellDockFullTarget = ModemUSBConfiguration(
         vendorID: 0x2C7C,
         productID: 0x0125,
         diagnosticEnabled: true,
@@ -95,6 +135,9 @@ struct ModemUSBConfiguration: Equatable {
         adbEnabled: true,
         audioEnabled: true
     )
+
+    // Kept as a source-compatible alias for existing setup and diagnostics.
+    static let maVoTarget = cellDockFullTarget
 
     static let maVoTargetWithoutADB = ModemUSBConfiguration(
         vendorID: 0x2C7C,
@@ -115,7 +158,15 @@ struct ModemUSBConfiguration: Equatable {
     }
 
     var isCellDockTarget: Bool {
-        self == Self.maVoTarget
+        self == Self.cellDockFullTarget
+    }
+
+    var isSafeQuectelSource: Bool {
+        vendorID == 0x2C7C && productID == 0x0125 && atPortEnabled
+    }
+
+    var supportsNativeQuectelRuntime: Bool {
+        self == Self.maVoTargetWithoutADB
     }
 
     var isSafeIdentityConversionSource: Bool {
@@ -162,6 +213,11 @@ struct ModemSnapshot: Equatable {
     var usbIdentity: String?
     var usbLocationID: UInt32?
     var usbRegistryID: UInt64?
+    var usbVendorName: String?
+    var usbProductName: String?
+    var hardwareFamily: ModemHardwareFamily = .unknown
+    var firmwareVersion: String?
+    var voiceCapability: ModemVoiceCapability = .unknown
     var operatorName: String?
     var accessTechnology: String?
     var signalDBm: Int?
@@ -284,7 +340,11 @@ struct ModemSnapshot: Equatable {
             return .unsupportedIdentity(normalizedIdentity)
         }
         guard let usbConfiguration else { return .inspecting }
-        guard usbConfiguration.isCellDockTarget else {
+        let supportsRequiredRuntime = usbConfiguration.isCellDockTarget || (
+            hardwareFamily == .quectelNativeVoice &&
+                usbConfiguration.supportsNativeQuectelRuntime
+        )
+        guard supportsRequiredRuntime else {
             return .unsupportedUSBConfiguration(usbConfiguration.compactDescription)
         }
         guard let usbNetMode else { return .inspecting }
@@ -467,12 +527,11 @@ enum CellularDataConnectionPolicy {
         if isChangingNetwork { return .starting }
 
         switch modem.operationalState {
-        case .ready:
+        case .ready, .configurationRequired:
             break
         case .failed:
             return .failed
-        case .absent, .enumerating, .initializing, .configurationRequired,
-             .restarting, .reconnecting:
+        case .absent, .enumerating, .initializing, .restarting, .reconnecting:
             return .waitingForModem
         }
 
